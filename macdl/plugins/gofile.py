@@ -1,9 +1,13 @@
 """
 GoFile.io plugin for extracting download links
+
+NOTE: GoFile API requires authentication. Guest access is limited.
+This plugin attempts to use the API but may fail for protected content.
 """
 
 import hashlib
 import time
+import re
 from typing import Optional
 
 from macdl.plugins.base import BasePlugin
@@ -16,14 +20,16 @@ class GoFilePlugin(BasePlugin):
     Plugin for downloading files from GoFile.io
     
     GoFile provides an API for accessing files. This plugin:
-    1. Creates a guest account (or uses existing token)
+    1. Creates a guest account via POST to /accounts
     2. Fetches content metadata via API
     3. Extracts direct download links
+    
+    Note: GoFile may require premium for some content.
     """
     
     name = "gofile"
     description = "GoFile.io file hosting"
-    version = "0.1.0"
+    version = "0.2.0"
     
     domains = ["gofile.io"]
     url_patterns = [r"gofile\.io/d/([a-zA-Z0-9]+)"]
@@ -34,7 +40,6 @@ class GoFilePlugin(BasePlugin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._token: Optional[str] = None
-        self._website_token: Optional[str] = None
     
     async def extract(self, url: str) -> list[DownloadInfo]:
         """
@@ -57,10 +62,6 @@ class GoFilePlugin(BasePlugin):
         if not self._token:
             await self._create_account()
         
-        # Get website token for API auth
-        if not self._website_token:
-            await self._get_website_token()
-        
         # Fetch content metadata
         content = await self._get_content(content_id)
         
@@ -77,12 +78,15 @@ class GoFilePlugin(BasePlugin):
             # Single file
             downloads.append(self._create_download_info(content, url))
         
+        if not downloads:
+            raise ExtractionError(
+                f"No downloadable files found. GoFile may require premium access for this content."
+            )
+        
         return downloads
     
     def _extract_content_id(self, url: str) -> Optional[str]:
         """Extract content ID from GoFile URL"""
-        import re
-        
         # Match patterns like gofile.io/d/abc123
         match = re.search(r"gofile\.io/d/([a-zA-Z0-9]+)", url)
         if match:
@@ -93,37 +97,23 @@ class GoFilePlugin(BasePlugin):
     async def _create_account(self) -> None:
         """Create a guest account to get an access token"""
         try:
-            data = await self._fetch_json(f"{self.API_BASE}/accounts")
-            if data.get("status") == "ok":
-                self._token = data.get("data", {}).get("token")
-            else:
-                raise ExtractionError(f"Failed to create GoFile account: {data}")
+            # GoFile uses POST for account creation
+            async with self._session.post(f"{self.API_BASE}/accounts") as response:
+                if response.status != 200:
+                    raise ExtractionError(
+                        f"Failed to create GoFile account: HTTP {response.status}"
+                    )
+                
+                data = await response.json()
+                if data.get("status") == "ok":
+                    self._token = data.get("data", {}).get("token")
+                else:
+                    raise ExtractionError(f"Failed to create GoFile account: {data}")
+                    
         except Exception as e:
+            if "ExtractionError" in str(type(e)):
+                raise
             raise ExtractionError(f"Failed to create GoFile account: {e}")
-    
-    async def _get_website_token(self) -> None:
-        """Get website token from GoFile JS"""
-        # The website token is typically embedded in the page
-        # For now, we'll use a static approach that works for most cases
-        try:
-            # Try to fetch from the website
-            text = await self._fetch("https://gofile.io/dist/js/alljs.js")
-            
-            # Look for websiteToken in the JS
-            import re
-            match = re.search(r'wt:\s*["\']([^"\']+)["\']', text)
-            if match:
-                self._website_token = match.group(1)
-            else:
-                # Fallback: generate a hash-based token
-                self._website_token = hashlib.sha256(
-                    str(time.time()).encode()
-                ).hexdigest()[:32]
-        except Exception:
-            # Fallback token generation
-            self._website_token = hashlib.sha256(
-                str(time.time()).encode()
-            ).hexdigest()[:32]
     
     async def _get_content(self, content_id: str) -> dict:
         """Fetch content metadata from GoFile API"""
@@ -131,34 +121,47 @@ class GoFilePlugin(BasePlugin):
             "Authorization": f"Bearer {self._token}",
         }
         
-        params = {
-            "wt": self._website_token,
-        }
-        
         url = f"{self.API_BASE}/contents/{content_id}"
         
         try:
-            async with self._session.get(url, headers=headers, params=params) as response:
-                response.raise_for_status()
+            async with self._session.get(url, headers=headers) as response:
                 data = await response.json()
                 
-                if data.get("status") != "ok":
-                    raise ExtractionError(f"GoFile API error: {data}")
-                
-                return data.get("data", {})
+                if data.get("status") == "ok":
+                    return data.get("data", {})
+                elif data.get("status") == "error-notPremium":
+                    raise ExtractionError(
+                        "GoFile requires premium account to access this content. "
+                        "Unfortunately, guest access is not available for this file."
+                    )
+                elif data.get("status") == "error-notFound":
+                    raise ExtractionError(
+                        f"Content not found: {content_id}. The file may have been deleted."
+                    )
+                elif data.get("status") == "error-passwordRequired":
+                    raise ExtractionError(
+                        "This content is password protected. Password support not yet implemented."
+                    )
+                else:
+                    raise ExtractionError(f"GoFile API error: {data.get('status', 'unknown')}")
+                    
+        except ExtractionError:
+            raise
         except Exception as e:
             raise ExtractionError(f"Failed to fetch GoFile content: {e}")
     
     def _create_download_info(self, file_info: dict, source_url: str) -> DownloadInfo:
         """Create DownloadInfo from GoFile file metadata"""
+        download_link = file_info.get("link", "")
+        
+        # GoFile direct links require the token cookie
         return DownloadInfo(
-            url=file_info.get("link", ""),
+            url=download_link,
             filename=file_info.get("name", "unknown"),
             size=file_info.get("size"),
             source_url=source_url,
             resume_supported=True,
             headers={
-                "Authorization": f"Bearer {self._token}",
                 "Cookie": f"accountToken={self._token}",
             },
         )

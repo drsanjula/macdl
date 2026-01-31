@@ -125,11 +125,15 @@ def get_registry() -> PluginRegistry:
 
 
 def _load_builtin_plugins(registry: PluginRegistry) -> None:
-    """Load all built-in plugins"""
-    from macdl.plugins.http_plugin import HTTPPlugin
+    """Load all built-in plugins (order matters - specific first, http last!)"""
     from macdl.plugins.gofile import GoFilePlugin
     from macdl.plugins.bunkr import BunkrPlugin
+    from macdl.plugins.http_plugin import HTTPPlugin
     
-    registry.register(HTTPPlugin)
+    # Register specific plugins first - they match by domain
     registry.register(GoFilePlugin)
     registry.register(BunkrPlugin)
+    
+    # HTTP plugin last - it matches ALL URLs as fallback
+    registry.register(HTTPPlugin)
+

@@ -116,9 +116,11 @@ async def _download_with_plugin(
             
         except Exception as e:
             console.print(f"[bold red]❌ Plugin extraction failed: {e}[/bold red]")
-            console.print("[dim]Falling back to direct download...[/dim]")
+            # Don't fall back to direct download for file hosting sites
+            # (would just download the HTML page, not the actual file)
+            return None
     
-    # Direct download (no plugin or fallback)
+    # Direct download (http plugin or no specific plugin)
     return await _download_single(url, output_path, threads, quiet, console)
 
 
