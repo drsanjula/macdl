@@ -1,0 +1,79 @@
+[project]
+name = "macdl"
+version = "0.1.0"
+description = "A lightweight, open-source download manager for macOS with multi-threaded downloads"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "drsanjula"}
+]
+requires-python = ">=3.10"
+keywords = ["download", "manager", "macos", "async", "multithreaded"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: MacOS X",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: File Transfer Protocol (FTP)",
+    "Topic :: Internet :: WWW/HTTP",
+]
+
+dependencies = [
+    "aiohttp>=3.9.0",
+    "aiofiles>=23.0.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PySide6>=6.6.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.2.0",
+]
+all = [
+    "macdl[gui,dev]",
+]
+
+[project.scripts]
+macdl = "macdl.cli.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/drsanjula/macdl"
+Repository = "https://github.com/drsanjula/macdl.git"
+Issues = "https://github.com/drsanjula/macdl/issues"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["macdl*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PT"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
