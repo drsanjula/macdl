@@ -260,7 +260,7 @@ class Downloader:
         info: DownloadInfo,
         headers: Optional[dict] = None,
     ) -> None:
-        """Download using multiple parallel segments"""
+        """Download using multiple parallel segments with staggered starts and dynamic concurrency"""
         job.status = DownloadStatus.DOWNLOADING
         
         if info.size is None:
@@ -272,6 +272,10 @@ class Downloader:
         # Create temp directory for segments
         temp_dir = Path(tempfile.mkdtemp(prefix="macdl_"))
         
+        # Use a semaphore to control concurrent connections
+        # This allows us to dynamically reduce concurrency if we hit 429s
+        concurrency_limit = asyncio.Semaphore(job.num_threads)
+        
         try:
             # Progress tracker
             tracker = ProgressTracker(
@@ -280,12 +284,32 @@ class Downloader:
             )
             tracker.start()
             
-            # Download all segments in parallel
+            async def _staggered_download(segment, index):
+                import random
+                # Randomized staggering: 0.5 to 2.5 seconds per connection
+                if index > 0:
+                    delay = random.uniform(0.5, 2.5) * index
+                    await asyncio.sleep(delay)
+                
+                async with concurrency_limit:
+                    try:
+                        await self._download_segment(
+                            job, segment, info.url, temp_dir, headers, tracker
+                        )
+                    except DownloadError as e:
+                        if "429" in str(e):
+                            # If we hit a 429, try to reduce the semaphore capacity
+                            # This is a bit hacky with asyncio.Semaphore but it signals 
+                            # the engine to stop opening more connections immediately.
+                            for _ in range(max(1, job.num_threads // 2)):
+                                if not concurrency_limit.locked():
+                                    await concurrency_limit.acquire()
+                        raise
+
+            # Download all segments
             tasks = [
-                self._download_segment(
-                    job, segment, info.url, temp_dir, headers, tracker
-                )
-                for segment in job.segments
+                _staggered_download(segment, i)
+                for i, segment in enumerate(job.segments)
             ]
             
             await asyncio.gather(*tasks)
