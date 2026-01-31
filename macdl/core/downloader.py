@@ -161,8 +161,8 @@ class Downloader:
         
         try:
             # Decide download strategy
-            if info.size and info.resume_supported and info.size > self.config.chunk_size:
-                # Use segmented download for large files with resume support
+            if info.size and info.resume_supported and info.size > self.config.chunk_size and job.num_threads > 1:
+                # Use segmented download for large files with resume support and multiple threads
                 await self._download_segmented(job, info, headers)
             else:
                 # Use simple streaming download
@@ -183,19 +183,33 @@ class Downloader:
         info: DownloadInfo,
         headers: Optional[dict] = None,
     ) -> None:
-        """Simple streaming download without segmentation with retries"""
+        """Simple streaming download without segmentation with retries and resume support"""
         job.status = DownloadStatus.DOWNLOADING
         
+        request_headers = headers or {}
+        max_retries = self.config.max_retries
+        
+        # Check for existing file to resume
+        start_byte = 0
+        if job.output_path.exists() and info.resume_supported:
+            start_byte = job.output_path.stat().st_size
+            if start_byte > 0:
+                if info.size and start_byte >= info.size:
+                    # Already finished
+                    job.downloaded_size = start_byte
+                    return
+                request_headers["Range"] = f"bytes={start_byte}-"
+                job.downloaded_size = start_byte
+
         # Progress tracker
         tracker = ProgressTracker(
             total_size=info.size,
             callback=lambda stats: self._on_progress(job, stats),
         )
         tracker.start()
-        
-        request_headers = headers or {}
-        max_retries = self.config.max_retries
-        
+        if start_byte > 0:
+            tracker.update(start_byte)
+
         for attempt in range(max_retries + 1):
             try:
                 async with self._session.get(info.url, headers=request_headers) as response:
@@ -207,12 +221,23 @@ class Downloader:
                         else:
                             raise DownloadError(f"Download failed after {max_retries} retries: HTTP 429 (Too Many Requests)")
                     
+                    # If we asked for range but server ignored it (sent 200 instead of 206)
+                    # we must restart from zero unless we ignore the previous content.
+                    if start_byte > 0 and response.status != 206:
+                        # Server doesn't support range or ignored it, start over
+                        start_byte = 0
+                        job.downloaded_size = 0
+                        tracker.update(0)
+                        mode = "wb"
+                    else:
+                        mode = "ab" if start_byte > 0 else "wb"
+
                     response.raise_for_status()
                     
                     # Ensure parent directory exists
                     job.output_path.parent.mkdir(parents=True, exist_ok=True)
                     
-                    async with aiofiles.open(job.output_path, "wb") as f:
+                    async with aiofiles.open(job.output_path, mode) as f:
                         async for chunk in response.content.iter_chunked(self.config.chunk_size):
                             await f.write(chunk)
                             job.downloaded_size += len(chunk)
@@ -220,6 +245,9 @@ class Downloader:
                 break # Success
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_retries:
+                    # Update Range header for the next attempt within the same call
+                    start_byte = job.output_path.stat().st_size if job.output_path.exists() else 0
+                    request_headers["Range"] = f"bytes={start_byte}-"
                     await asyncio.sleep(2 ** attempt)
                 else:
                     raise DownloadError(f"Download failed after {max_retries} retries: {e}")
