@@ -118,9 +118,12 @@ async def _download_with_plugin(
             return last_job
             
         except Exception as e:
-            console.print(f"[bold red]❌ Plugin extraction failed: {e}[/bold red]")
-            # Don't fall back to direct download for file hosting sites
-            # (would just download the HTML page, not the actual file)
+            if "ExtractionError" in str(type(e)) or "No downloadable files found" in str(e):
+                console.print(f"[bold red]❌ Plugin extraction failed: {e}[/bold red]")
+            else:
+                console.print(f"[bold red]❌ Download failed: {e}[/bold red]")
+                if "429" in str(e):
+                    console.print("[yellow]💡 Tip: GoFile often rate-limits guest downloads. Try reducing threads with '-t 1'.[/yellow]")
             return None
     
     # Direct download (http plugin or no specific plugin)

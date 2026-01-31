@@ -183,7 +183,7 @@ class Downloader:
         info: DownloadInfo,
         headers: Optional[dict] = None,
     ) -> None:
-        """Simple streaming download without segmentation"""
+        """Simple streaming download without segmentation with retries"""
         job.status = DownloadStatus.DOWNLOADING
         
         # Progress tracker
@@ -194,18 +194,35 @@ class Downloader:
         tracker.start()
         
         request_headers = headers or {}
+        max_retries = self.config.max_retries
         
-        async with self._session.get(info.url, headers=request_headers) as response:
-            response.raise_for_status()
-            
-            # Ensure parent directory exists
-            job.output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            async with aiofiles.open(job.output_path, "wb") as f:
-                async for chunk in response.content.iter_chunked(self.config.chunk_size):
-                    await f.write(chunk)
-                    job.downloaded_size += len(chunk)
-                    tracker.update(job.downloaded_size)
+        for attempt in range(max_retries + 1):
+            try:
+                async with self._session.get(info.url, headers=request_headers) as response:
+                    if response.status == 429:
+                        wait_time = 2 ** attempt
+                        if attempt < max_retries:
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            raise DownloadError(f"Download failed after {max_retries} retries: HTTP 429 (Too Many Requests)")
+                    
+                    response.raise_for_status()
+                    
+                    # Ensure parent directory exists
+                    job.output_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    async with aiofiles.open(job.output_path, "wb") as f:
+                        async for chunk in response.content.iter_chunked(self.config.chunk_size):
+                            await f.write(chunk)
+                            job.downloaded_size += len(chunk)
+                            tracker.update(job.downloaded_size)
+                break # Success
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    raise DownloadError(f"Download failed after {max_retries} retries: {e}")
         
         tracker.finish()
     
@@ -285,23 +302,45 @@ class Downloader:
         headers: Optional[dict],
         tracker: ProgressTracker,
     ) -> None:
-        """Download a single segment"""
+        """Download a single segment with retries"""
         segment.temp_file = temp_dir / f"segment_{segment.id}.tmp"
         
         request_headers = dict(headers) if headers else {}
-        request_headers["Range"] = f"bytes={segment.start}-{segment.end}"
+        max_retries = self.config.max_retries
         
-        async with self._session.get(url, headers=request_headers) as response:
-            if response.status not in (200, 206):
-                raise DownloadError(f"Segment download failed: HTTP {response.status}")
-            
-            async with aiofiles.open(segment.temp_file, "wb") as f:
-                async for chunk in response.content.iter_chunked(self.config.chunk_size):
-                    await f.write(chunk)
-                    segment.downloaded += len(chunk)
-                    job.update_progress()
-                    tracker.update(job.downloaded_size)
+        for attempt in range(max_retries + 1):
+            try:
+                # Add Range header
+                request_headers["Range"] = f"bytes={segment.start + segment.downloaded}-{segment.end}"
+                
+                async with self._session.get(url, headers=request_headers) as response:
+                    if response.status == 429:
+                        wait_time = 2 ** attempt
+                        if attempt < max_retries:
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            raise DownloadError(f"Segment {segment.id} failed after {max_retries} retries: HTTP 429 (Too Many Requests)")
+                    
+                    if response.status not in (200, 206):
+                        raise DownloadError(f"Segment {segment.id} download failed: HTTP {response.status}")
+                    
+                    # Open file in append mode if we're retrying
+                    mode = "ab" if segment.downloaded > 0 else "wb"
+                    async with aiofiles.open(segment.temp_file, mode) as f:
+                        async for chunk in response.content.iter_chunked(self.config.chunk_size):
+                            await f.write(chunk)
+                            segment.downloaded += len(chunk)
+                            job.update_progress()
+                            tracker.update(job.downloaded_size)
+                break # Success
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if attempt < max_retries:
+                    await asyncio.sleep(2 ** attempt)
+                else:
+                    raise DownloadError(f"Segment {segment.id} failed after {max_retries} retries: {e}")
         
+        segment.completed = True
         segment.completed = True
     
     async def _merge_segments(self, job: DownloadJob, temp_dir: Path) -> None:
