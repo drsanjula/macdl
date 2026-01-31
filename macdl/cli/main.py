@@ -291,5 +291,75 @@ def batch(urls: tuple[str, ...], url_file: str | None, output: str | None, threa
     console.print(f"\n[bold]📊 Summary:[/bold] {success} succeeded, {failed} failed")
 
 
+@cli.command()
+@click.option("-n", "--limit", default=10, help="Number of entries to show")
+@click.option("--stats", is_flag=True, help="Show statistics only")
+@click.option("--clear", is_flag=True, help="Clear download history")
+def history(limit: int, stats: bool, clear: bool):
+    """Show download history and statistics"""
+    from rich.console import Console
+    from rich.table import Table
+    
+    from macdl.storage import get_db
+    
+    console = Console()
+    db = get_db()
+    
+    if clear:
+        count = db.clear_history()
+        console.print(f"[green]✅ Cleared {count} entries from history[/green]")
+        return
+    
+    if stats:
+        statistics = db.get_statistics()
+        
+        table = Table(title="Download Statistics")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        
+        table.add_row("Total Downloads", str(statistics["total_downloads"]))
+        table.add_row("Total Downloaded", format_size(statistics["total_bytes"]))
+        
+        for status, count in statistics.get("by_status", {}).items():
+            table.add_row(f"  {status.capitalize()}", str(count))
+        
+        console.print(table)
+        return
+    
+    # Show recent downloads
+    downloads = db.get_downloads(limit=limit)
+    
+    if not downloads:
+        console.print("[dim]No downloads in history[/dim]")
+        return
+    
+    table = Table(title=f"Recent Downloads (last {len(downloads)})")
+    table.add_column("ID", style="dim")
+    table.add_column("Filename", style="cyan")
+    table.add_column("Size", style="green")
+    table.add_column("Status", style="yellow")
+    table.add_column("Date", style="dim")
+    
+    for dl in downloads:
+        status_style = {
+            "completed": "green",
+            "failed": "red",
+            "cancelled": "yellow",
+            "downloading": "blue",
+            "pending": "dim",
+        }.get(dl.status.value, "white")
+        
+        table.add_row(
+            dl.id[:8],
+            dl.filename[:30] + ("..." if len(dl.filename) > 30 else ""),
+            format_size(dl.total_size) if dl.total_size else "Unknown",
+            f"[{status_style}]{dl.status.value}[/{status_style}]",
+            dl.created_at.strftime("%Y-%m-%d %H:%M"),
+        )
+    
+    console.print(table)
+
+
 if __name__ == "__main__":
     cli()
+
