@@ -128,11 +128,19 @@ def _load_builtin_plugins(registry: PluginRegistry) -> None:
     """Load all built-in plugins (order matters - specific first, http last!)"""
     from macdl.plugins.gofile import GoFilePlugin
     from macdl.plugins.bunkr import BunkrPlugin
+    from macdl.plugins.pixeldrain import PixeldrainPlugin
+    from macdl.plugins.mediafire import MediaFirePlugin
+    from macdl.plugins.krakenfiles import KrakenFilesPlugin
+    from macdl.plugins.qiwi import QiwiPlugin
     from macdl.plugins.http_plugin import HTTPPlugin
     
     # Register specific plugins first - they match by domain
     registry.register(GoFilePlugin)
     registry.register(BunkrPlugin)
+    registry.register(PixeldrainPlugin)
+    registry.register(MediaFirePlugin)
+    registry.register(KrakenFilesPlugin)
+    registry.register(QiwiPlugin)
     
     # HTTP plugin last - it matches ALL URLs as fallback
     registry.register(HTTPPlugin)
