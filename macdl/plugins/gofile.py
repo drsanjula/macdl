@@ -40,6 +40,7 @@ class GoFilePlugin(BasePlugin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._token: Optional[str] = None
+        self._wt: Optional[str] = None
     
     async def extract(self, url: str) -> list[DownloadInfo]:
         """
@@ -61,6 +62,10 @@ class GoFilePlugin(BasePlugin):
         # Get or create account token
         if not self._token:
             await self._create_account()
+            
+        # Get website token (wt)
+        if not self._wt:
+            await self._fetch_website_token()
         
         # Fetch content metadata
         content = await self._get_content(content_id)
@@ -68,19 +73,23 @@ class GoFilePlugin(BasePlugin):
         # Extract file info
         downloads = []
         
-        if content.get("type") == "folder":
-            # Folder with multiple files
-            children = content.get("children", {})
+        # Data structure: data['children'] contains the files
+        children = content.get("children", {})
+        if isinstance(children, dict):
             for file_id, file_info in children.items():
                 if file_info.get("type") == "file":
                     downloads.append(self._create_download_info(file_info, url))
-        else:
-            # Single file
+        elif isinstance(children, list):
+            for file_info in children:
+                if file_info.get("type") == "file":
+                    downloads.append(self._create_download_info(file_info, url))
+        elif content.get("type") == "file":
+            # Direct file link (rare via /d/ but possible)
             downloads.append(self._create_download_info(content, url))
         
         if not downloads:
             raise ExtractionError(
-                f"No downloadable files found. GoFile may require premium access for this content."
+                f"No downloadable files found. GoFile may require premium access or the link is invalid."
             )
         
         return downloads
@@ -94,6 +103,22 @@ class GoFilePlugin(BasePlugin):
         
         return None
     
+    async def _fetch_website_token(self) -> None:
+        """Fetch the current website token (wt) from GoFile config"""
+        try:
+            async with self._session.get("https://gofile.io/dist/js/config.js") as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    match = re.search(r'appdata\.wt\s*=\s*["\']([^"\']+)["\']', text)
+                    if match:
+                        self._wt = match.group(1)
+            
+            if not self._wt:
+                # Fallback to current known token if extraction fails
+                self._wt = "4fd6sg89d7s6"
+        except Exception:
+            self._wt = "4fd6sg89d7s6"
+
     async def _create_account(self) -> None:
         """Create a guest account to get an access token"""
         try:
@@ -119,20 +144,30 @@ class GoFilePlugin(BasePlugin):
         """Fetch content metadata from GoFile API"""
         headers = {
             "Authorization": f"Bearer {self._token}",
+            "X-Website-Token": self._wt
+        }
+        
+        # Browser uses these parameters
+        params = {
+            "contentFilter": "",
+            "page": "1",
+            "pageSize": "1000",
+            "sortField": "name",
+            "sortDirection": "1"
         }
         
         url = f"{self.API_BASE}/contents/{content_id}"
         
         try:
-            async with self._session.get(url, headers=headers) as response:
+            async with self._session.get(url, headers=headers, params=params) as response:
                 data = await response.json()
                 
                 if data.get("status") == "ok":
                     return data.get("data", {})
                 elif data.get("status") == "error-notPremium":
                     raise ExtractionError(
-                        "GoFile requires premium account to access this content. "
-                        "Unfortunately, guest access is not available for this file."
+                        "GoFile reports that premium is required for this content. "
+                        "This usually happens when the website token (wt) is invalid or the file is restricted."
                     )
                 elif data.get("status") == "error-notFound":
                     raise ExtractionError(
