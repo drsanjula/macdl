@@ -32,6 +32,9 @@ def download(url: str, output: str | None, threads: int, quiet: bool):
     """
     from rich.console import Console
     
+    # Sanitize URL: remove whitespace and internal newlines
+    url = "".join(url.split())
+    
     console = Console()
     
     console.print(f"[bold green]🚀 MacDL v{__version__}[/bold green]")
@@ -272,7 +275,12 @@ def batch(urls: tuple[str, ...], url_file: str | None, output: str | None, threa
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
+                    # Sanitize URL: remove whitespace and internal newlines
+                    line = "".join(line.split())
                     all_urls.append(line)
+    
+    # Also sanitize directly passed URLs
+    all_urls = ["".join(u.split()) for u in all_urls]
     
     if not all_urls:
         console.print("[bold red]❌ No URLs provided[/bold red]")
