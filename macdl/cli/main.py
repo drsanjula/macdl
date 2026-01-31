@@ -88,6 +88,12 @@ async def _download_with_plugin(
         console.print(f"[dim]🔌 Plugin:[/dim] {plugin.name} ({plugin.description})")
         
         try:
+            # Extraction and thread adjustment
+            if plugin.max_threads and threads > plugin.max_threads:
+                if not quiet:
+                    console.print(f"[yellow]⚠️  {plugin.name.title()} limits guest downloads. Reducing threads to {plugin.max_threads}.[/yellow]")
+                threads = plugin.max_threads
+
             # Extract real download URLs using plugin
             if not quiet:
                 console.print(f"[dim]⏳ Extracting download links...[/dim]")

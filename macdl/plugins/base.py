@@ -36,6 +36,10 @@ class BasePlugin(ABC):
     # URL patterns (regex) this plugin handles
     # More specific than domains, optional
     url_patterns: list[str] = []
+
+    # Maximum recommended threads for this plugin
+    # None = use global config
+    max_threads: Optional[int] = None
     
     def __init__(self, session: Optional[aiohttp.ClientSession] = None):
         self._session = session

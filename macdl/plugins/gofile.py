@@ -37,6 +37,9 @@ class GoFilePlugin(BasePlugin):
     # GoFile API endpoints
     API_BASE = "https://api.gofile.io"
     
+    # GoFile guest downloads are strictly rate-limited
+    max_threads = 1
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._token: Optional[str] = None
