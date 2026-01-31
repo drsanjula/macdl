@@ -188,7 +188,16 @@ async def _download_single(
 @cli.command()
 def gui():
     """Launch the graphical interface"""
-    click.echo("🖥️  GUI coming in Phase 7!")
+    try:
+        from macdl.gui import run_gui
+        run_gui()
+    except ImportError as e:
+        from rich.console import Console
+        console = Console()
+        console.print("[bold red]❌ GUI dependencies not installed[/bold red]")
+        console.print("[dim]Install with: pip install 'macdl[gui]'[/dim]")
+        console.print(f"[dim]Error: {e}[/dim]")
+        raise SystemExit(1)
 
 
 @cli.command()
